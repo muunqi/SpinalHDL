@@ -77,3 +77,5 @@ command
 sim/yolo/rtl/__simulation_def.v
 sim/simulation_plugins/*
 !sim/simulation_plugins/.gitignore
+
+/project/metals.sbt
