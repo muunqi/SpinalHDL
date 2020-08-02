@@ -2410,3 +2410,124 @@ object SpinalVerilogBoot{
     report
   }
 }
+
+
+object SpinalSystemVerilogBoot{
+
+  def apply[T <: Component](config: SpinalConfig)(gen: => T): SpinalReport[T] ={
+    if(config.debugComponents.nonEmpty){
+      return singleShot(config)(gen)
+    }
+    try {
+      singleShot(config)(gen)
+    } catch {
+      case e: NullPointerException =>
+        println(
+          """
+            |ERROR !
+            |A null pointer access has been detected in the JVM.
+            |This could happen when in your SpinalHDL description, you access an signal which is only defined further.
+            |For instance :
+            |  val result = Bool
+            |  result := a ^ b  //a and b can't be accessed there because they are only defined one line below (Software rule of execution order)
+            |  val a,b = Bool
+          """.stripMargin)
+        System.out.flush()
+        throw e
+      case e: Throwable => {
+        println("\n**********************************************************************************************")
+        val errCnt = SpinalError.getErrorCount()
+        SpinalWarning(s"Elaboration failed (${errCnt} error" + (if(errCnt > 1){s"s"} else {s""}) + s").\n" +
+          s"          Spinal will restart with scala trace to help you to find the problem.")
+        println("**********************************************************************************************\n")
+        System.out.flush()
+
+        //Fill the ScalaLocated object which had trigger into the scalaLocatedCompoments
+        GlobalData.get.applyScalaLocated()
+        return singleShot(config.copy(debugComponents = GlobalData.get.scalaLocatedComponents))(gen)
+      }
+    }
+  }
+
+  def singleShot[T <: Component](config: SpinalConfig)(gen : => T): SpinalReport[T] = ScopeProperty.sandbox{
+
+    val pc = new PhaseContext(config)
+    pc.globalData.phaseContext = pc
+    pc.globalData.anonymSignalPrefix = if(config.anonymSignalPrefix == null) "_zz" else config.anonymSignalPrefix
+
+    val prunedSignals    = mutable.Set[BaseType]()
+    val unusedSignals    = mutable.Set[BaseType]()
+    val counterRegister  = Ref[Int](0)
+    val blackboxesSourcesPaths  = new mutable.LinkedHashSet[String]()
+
+    SpinalProgress("Elaborate components")
+
+    val phases = ArrayBuffer[Phase]()
+
+    phases += new PhaseCreateComponent(gen)(pc)
+    phases += new PhaseDummy(SpinalProgress("Checks and transforms"))
+    phases ++= config.transformationPhases
+    phases ++= config.memBlackBoxers
+    phases += new PhaseDeviceSpecifics(pc)
+    phases += new PhaseApplyIoDefault(pc)
+
+    phases += new PhaseNameNodesByReflection(pc)
+    phases += new PhaseCollectAndNameEnum(pc)
+
+    phases += new PhaseCheckIoBundle()
+    phases += new PhaseCheckHiearchy()
+    phases += new PhaseAnalog()
+    phases += new PhaseRemoveUselessStuff(false, false)
+    phases += new PhaseRemoveIntermediateUnnameds(true)
+
+    phases += new PhasePullClockDomains(pc)
+
+    phases += new PhaseInferEnumEncodings(pc,e => if(e == `native`) binarySequential else e)
+    phases += new PhaseInferWidth(pc)
+    phases += new PhaseNormalizeNodeInputs(pc)
+    phases += new PhaseSimplifyNodes(pc)
+
+    phases += new PhaseCompletSwitchCases()
+    phases += new PhaseRemoveUselessStuff(true, true)
+    phases += new PhaseRemoveIntermediateUnnameds(false)
+
+    phases += new PhaseCheck_noLatchNoOverride(pc)
+    phases += new PhaseCheck_noRegisterAsLatch()
+    phases += new PhaseCheckCombinationalLoops()
+    phases += new PhaseCheckCrossClock()
+
+    phases += new PhaseAllocateNames(pc)
+    phases += new PhaseDevice(pc)
+
+    phases += new PhaseGetInfoRTL(prunedSignals, unusedSignals, counterRegister, blackboxesSourcesPaths)(pc)
+
+    phases += new PhaseDummy(SpinalProgress("Generate SystemVerilog"))
+
+    val report = new SpinalReport[T]()
+    phases += new PhaseSystemVerilog(pc, report)
+
+    for(inserter <-config.phasesInserters){
+      inserter(phases)
+    }
+
+    for(phase <- phases){
+      if(config.verbose) SpinalProgress(s"${phase.getClass.getSimpleName}")
+      pc.doPhase(phase)
+    }
+
+    if(prunedSignals.nonEmpty){
+      SpinalWarning(s"${prunedSignals.size} signals were pruned. You can call printPruned on the backend report to get more informations.")
+    }
+
+//    SpinalInfo(s"Number of registers : ${counterRegister.value}")
+
+    pc.checkGlobalData()
+    report.toplevel = pc.topLevel.asInstanceOf[T]
+    report.prunedSignals ++= prunedSignals
+    report.unusedSignals ++= unusedSignals
+    report.counterRegister = counterRegister.value
+    report.blackboxesSourcesPaths ++= blackboxesSourcesPaths
+
+    report
+  }
+}

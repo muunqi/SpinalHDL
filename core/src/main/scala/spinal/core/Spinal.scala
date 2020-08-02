@@ -118,7 +118,7 @@ object blackboxByteEnables extends MemBlackboxingPolicy{
 
 
 /**
- * Spinal configuration for the generation of the RTL 
+ * Spinal configuration for the generation of the RTL
  */
 case class SpinalConfig(mode                           : SpinalMode = null,
                         flags                          : mutable.HashSet[Any] = mutable.HashSet[Any](),
@@ -349,7 +349,7 @@ object Spinal{
     val report = configPatched.mode match {
       case `VHDL`    => SpinalVhdlBoot(configPatched)(gen)
       case `Verilog` => SpinalVerilogBoot(configPatched)(gen)
-      case `SystemVerilog` => SpinalVerilogBoot(configPatched)(gen)
+      case `SystemVerilog` => SpinalSystemVerilogBoot(configPatched)(gen)
     }
 
     println({SpinalLog.tag("Done", Console.GREEN)} + s" at ${f"${Driver.executionTime}%1.3f"}")
